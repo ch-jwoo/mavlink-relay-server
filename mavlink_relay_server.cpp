@@ -28,9 +28,16 @@ int udp_sock;
 sockaddr_in udp_clnt_adr;
 socklen_t udp_clnt_adr_sz;
 
-uint16_t tcp_port, udp_port;
+uint16_t tcp_port;	/* connect with GCSs */
+uint16_t udp_port;	/* connect with vehicles */
 
-std::map<uint8_t, sockaddr_in> uav_info; // system_id : addr
+/* save mavlink's system id of vehicle with udp socket address */
+std::map<uint8_t, sockaddr_in> uav_info;
+
+/* 
+ * List of GCS connected with this server.
+ * Packet of vehicles are routed to these GCSs.
+ */
 std::vector<int> gcs_socket_fd_list;
 
 int main(int argc, char *argv[])
