@@ -16,22 +16,22 @@
 #include <sys/time.h>
 #include <common/mavlink.h>
 
-#define DEFAULT_GCS_PORT 20250
-#define DEFAULT_UAV_PORT 20200
+#define DEFAULT_TCP_PORT 20250
+#define DEFAULT_UDP_PORT 20200
 
 void error_handling(const char *message);
 uint8_t extract_target_id(uint8_t* buf, ssize_t buf_size);
-void uavToGcs(int sock, uint8_t* buf, ssize_t buf_size);
-void gcsToUav(int sock, uint8_t* buf, ssize_t buf_size);
+void vehicle2gcs(int sock, uint8_t* buf, ssize_t buf_size);
+void gcs2vehicle(int sock, uint8_t* buf, ssize_t buf_size);
 
 int udp_sock;
 sockaddr_in udp_clnt_adr;
 socklen_t udp_clnt_adr_sz;
 
-uint16_t GCS_PORT, UAV_PORT;
+uint16_t tcp_port, udp_port;
 
-std::map<uint8_t, sockaddr_in> uavInfo; // system_id : addr
-std::vector<int> gcsSocketList;
+std::map<uint8_t, sockaddr_in> uav_info; // system_id : addr
+std::vector<int> gcs_socket_fd_list;
 
 int main(int argc, char *argv[])
 {
@@ -41,20 +41,20 @@ int main(int argc, char *argv[])
 		return 0;
 	}
 	else if(argc == 3){
-		GCS_PORT = atoi(argv[1]);
-		UAV_PORT = atoi(argv[2]);
+		tcp_port = atoi(argv[1]);
+		udp_port = atoi(argv[2]);
 	}
 	else if(argc == 2){
-		GCS_PORT = atoi(argv[1]);
-		UAV_PORT = DEFAULT_UAV_PORT;
+		tcp_port = atoi(argv[1]);
+		udp_port = DEFAULT_UDP_PORT;
 	}
 	else{
-		GCS_PORT = DEFAULT_GCS_PORT;
-		UAV_PORT = DEFAULT_UAV_PORT;
+		tcp_port = DEFAULT_TCP_PORT;
+		udp_port = DEFAULT_UDP_PORT;
 	}
 
-	printf(" TCP port (for GCS): %u\n", GCS_PORT);
-	printf(" UDP port (for vehicle) : %u\n", UAV_PORT);
+	printf(" TCP port (for GCS): %u\n", tcp_port);
+	printf(" UDP port (for vehicle) : %u\n", udp_port);
 
 	int fd_max = 0;
 
@@ -67,7 +67,7 @@ int main(int argc, char *argv[])
 	memset(&tcp_adr, 0, sizeof(tcp_adr));
     tcp_adr.sin_family=AF_INET;
     tcp_adr.sin_addr.s_addr=htonl(INADDR_ANY);
-    tcp_adr.sin_port=htons(GCS_PORT);
+    tcp_adr.sin_port=htons(tcp_port);
     if(bind(tcp_sock, (struct sockaddr*) &tcp_adr, sizeof(tcp_adr))==-1)
         error_handling("bind() error");
     if(listen(tcp_sock, 3)==-1)
@@ -87,7 +87,7 @@ int main(int argc, char *argv[])
 	memset(&udp_adr, 0, sizeof(udp_adr));
 	udp_adr.sin_family=AF_INET;
 	udp_adr.sin_addr.s_addr=htonl(INADDR_ANY);
-	udp_adr.sin_port=htons(UAV_PORT);
+	udp_adr.sin_port=htons(udp_port);
 	if(bind(udp_sock, (struct sockaddr*)&udp_adr, sizeof(udp_adr))==-1)
 		error_handling("bind() error");
 	
@@ -136,7 +136,7 @@ int main(int argc, char *argv[])
 						fputs("making connection fail\n", stderr);
 						continue;
 					}
-					gcsSocketList.push_back(tcp_clnt_sock);
+					gcs_socket_fd_list.push_back(tcp_clnt_sock);
 					FD_SET(tcp_clnt_sock, &reads);
 					if(fd_max < tcp_clnt_sock)
 						fd_max = tcp_clnt_sock;
@@ -152,7 +152,7 @@ int main(int argc, char *argv[])
 						fputs("udp recvfrom fail\n", stderr);
 						continue;
 					}
-					uavToGcs(i, buf, n);
+					vehicle2gcs(i, buf, n);
 				}
 				/* packet from GCS (TCP socket) */
 				else
@@ -162,15 +162,15 @@ int main(int argc, char *argv[])
 					/* GCS request server to terminate connection */
 					if(n == 0){
 						std::vector<int>::iterator iter;
-						iter = std::find(gcsSocketList.begin(), gcsSocketList.end(), i);
-						gcsSocketList.erase(iter);
+						iter = std::find(gcs_socket_fd_list.begin(), gcs_socket_fd_list.end(), i);
+						gcs_socket_fd_list.erase(iter);
 						FD_CLR(i, &reads);
 						close(i);
 						printf("GCS is terminated : %d \n", i);
 					}
 					/* routing packet to vehicle */
 					else{
-						gcsToUav(i, buf, n);
+						gcs2vehicle(i, buf, n);
 					}
 				}
 			}
@@ -227,7 +227,7 @@ uint8_t extract_target_id(uint8_t* buf, ssize_t buf_size)
  * \param	buf			buffer received from vehicle
  * \param	buf_size	size of buffer
  */
-void uavToGcs(int sock, uint8_t* buf, ssize_t buf_size)
+void vehicle2gcs(int sock, uint8_t* buf, ssize_t buf_size)
 {
 	mavlink_message_t msg;
 	mavlink_status_t status;
@@ -243,12 +243,12 @@ void uavToGcs(int sock, uint8_t* buf, ssize_t buf_size)
 	 * save socket address of this vehicle 
 	 * (this data are used for routing GCS's packet to vehicle) 
 	 */
-	uavInfo[msg.sysid] = udp_clnt_adr;
+	uav_info[msg.sysid] = udp_clnt_adr;
 
 	/* 
 	 * Route vehicle's packet to all of GCS connected this server. 
 	 */
-	for(auto iter = gcsSocketList.begin(); iter < gcsSocketList.end(); iter++){
+	for(auto iter = gcs_socket_fd_list.begin(); iter < gcs_socket_fd_list.end(); iter++){
 		if(write(*iter, buf, buf_size) == -1){
 			fputc(*iter, stderr);
 			fputs(" : tcp write fail\n", stderr);
@@ -262,7 +262,7 @@ void uavToGcs(int sock, uint8_t* buf, ssize_t buf_size)
  * \param	buf			buffer received from GCS
  * \param	buf_size	size of buffer
  */
-void gcsToUav(int sock, uint8_t* buf, ssize_t buf_size)
+void gcs2vehicle(int sock, uint8_t* buf, ssize_t buf_size)
 {
 	socklen_t udp_clnt_adr_sz = sizeof(sockaddr_in);
 
@@ -271,7 +271,7 @@ void gcsToUav(int sock, uint8_t* buf, ssize_t buf_size)
 
 	/* brodcast the packet when target id is 0 */
 	if(target_id == 0){
-		for(auto uav : uavInfo)
+		for(auto uav : uav_info)
 		{
 			if(sendto(udp_sock, buf, buf_size, 0, 
 						(struct sockaddr*)&uav.second, udp_clnt_adr_sz) == -1){
@@ -283,10 +283,10 @@ void gcsToUav(int sock, uint8_t* buf, ssize_t buf_size)
 	/* unicasting packet */
 	else{
 		if(sendto(udp_sock, buf, buf_size, 0, 
-					(struct sockaddr*)&uavInfo[target_id], udp_clnt_adr_sz) == -1){
+					(struct sockaddr*)&uav_info[target_id], udp_clnt_adr_sz) == -1){
 			fputs("udp sendto fail\n", stderr);
 			return;
 		}
-		// printf("%d %d, %d\n", target_id, uavInfo[target_id].sin_addr.s_addr, uavInfo[target_id].sin_port);
+		// printf("%d %d, %d\n", target_id, uav_info[target_id].sin_addr.s_addr, uav_info[target_id].sin_port);
 	}
 }
