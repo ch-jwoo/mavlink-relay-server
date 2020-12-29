@@ -35,8 +35,11 @@ I use MAVROS's connection URL for sending packet to server.
 But, if I use TCP URL, MAVROS didn't work when server was not executed. 
 So, I use UDP on server in order to working MAVROS when server is not used.   
 
-About ROS connection URL : https://github.com/mavlink/mavros/blob/master/mavros/README.md
+About ROS connection URL : https://github.com/mavlink/mavros/blob/master/mavros/README.md   
    
+<div>
+    <img width="500" src="./.readme/System diagram.png">
+</div>
 
 ## At Vehicle (ROS)
 In this project, It is used that 'Jetson Nano' communicate with pixhawk using UART. 
@@ -57,3 +60,7 @@ You can set UDP connection at QGC as follow.
 6. Set Host Address (your server's fixed IP address), TCP Port (port number you set above)
 7. Click OK
 8. Select slot and click Connect
+
+<div>
+    <img width="300" src="./.readme/GCS setting.png">
+</div>
